@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Go Online (Firebase) — KO + 日式計分 + 6.5 貼目 + 地盤陰影 + 外側座標</title>
+<style>
+  :root{
+    --wood:#D7B899;
+    --wood-dark:#C49E76;
+    --panel:#ffffff;
+    --ink:#222;
+    --muted:#666;
+    --accent:#2563eb;
+    --green:#10b981;
+    --red:#ef4444;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    font-family: system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif;
+    color:var(--ink);
+    background:#f5f6f8;
+    display:flex;
+    min-height:100vh;
+    gap:16px;
+  }
+  .sidebar{
+    width:340px;
+    background:var(--panel);
+    padding:16px;
+    box-shadow:0 2px 10px rgba(0,0,0,.06);
+    overflow:auto;
+  }
+  h1{font-size:18px;margin:0 0 8px}
+  h2{font-size:14px;margin:16px 0 8px;color:var(--muted)}
+  label{display:block;font-size:13px;margin:8px 0 4px}
+  input,select,button,textarea{
+    width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:14px;
+    background:#fff;outline:none;
+  }
+  input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+  .row{display:flex;gap:8px}
+  .row > *{flex:1}
+  .btn{cursor:pointer;border:none;background:var(--accent);color:#fff}
+  .btn.secondary{background:#64748b}
+  .btn.success{background:var(--green)}
+  .btn.danger{background:var(--red)}
+  .btn:disabled{opacity:.6;cursor:not-allowed}
+  .status{
+    display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;background:#fafafa;border:1px solid #eee;border-radius:8px;padding:8px
+  }
+  .status div{font-size:13px}
+  .board-wrap{
+    flex:1;display:flex;align-items:center;justify-content:center;padding:16px
+  }
+  canvas{touch-action:manipulation;display:block}
+  .foot{font-size:12px;color:#666;margin-top:8px}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#334155;font-size:12px}
+  .switch{
+    display:flex;align-items:center;gap:8px;margin-top:8px;
+  }
+  .note{font-size:12px;color:#555;line-height:1.5}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}
+</style>
+</head>
+<body>
+  <aside class="sidebar">
+    <h1>遠端 1 對 1（Firebase Firestore）</h1>
+    <div class="pill" id="connState">離線</div>
+    <h2>線上對弈設定</h2>
+    <label>房間 ID</label>
+    <input id="roomId" placeholder="例如：my-room-001"/>
+    <label>我的角色</label>
+    <select id="myRole">
+      <option value="auto">自動（先入=黑、後入=白）</option>
+      <option value="black">黑</option>
+      <option value="white">白</option>
+      <option value="observer">觀戰</option>
+    </select>
+    <div class="row" style="margin-top:8px">
+      <button id="btnConnect" class="btn">連線房間</button>
+      <button id="btnDisconnect" class="btn secondary" disabled>離線</button>
+    </div>
+
+    <h2>Firebase 設定</h2>
+    <div class="note">你可以把 <b>Firebase 設定 JSON</b> 貼在下方（會存瀏覽器，不用修改檔案）：</div>
+    <textarea id="firebaseCfg" rows="6" class="mono" placeholder='{
+  "apiKey": "AIzaSyDKLftkAqh3Phq2_PuflllQHE3Tlh3lTQg",
+  "authDomain": "go-online-game-125ad.firebaseapp.com",
+  "projectId": "go-online-game-125ad",
+  "storageBucket": "go-online-game-125ad.firebasestorage.app",
+  "messagingSenderId": "186386152047",
+  "appId": "1:186386152047:web:7532b19a415d801dde2b9a"
+}'></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="btnSaveCfg" class="btn success">儲存設定</button>
+      <button id="btnClearCfg" class="btn danger">清除</button>
+    </div>
+
+    <h2>對局控制</h2>
+    <div class="row">
+      <button id="btnPass" class="btn">虛手</button>
+      <button id="btnNew" class="btn secondary">新對局</button>
+    </div>
+    <div class="switch">
+      <input type="checkbox" id="chkShade"/>
+      <label for="chkShade">終局顯示地盤淡色標示</label>
+    </div>
+
+    <h2>狀態 / 計分</h2>
+    <div class="status">
+      <div>輪到：<b id="turnLabel">黑</b></div>
+      <div>打劫：<b id="koLabel">無</b></div>
+      <div>黑提子：<b id="bCap">0</b></div>
+      <div>白提子：<b id="wCap">0</b></div>
+      <div>貼目 Komi：<b id="komi">6.5</b></div>
+      <div>局面：<b id="phase">對局中</b></div>
+      <div>黑地+提：<b id="bScore">0</b></div>
+      <div>白地+提+貼：<b id="wScore">0</b></div>
+    </div>
+    <div class="foot">座標標示：畫在木紋區、緊貼格線外側，不影響點擊。</div>
+  </aside>
+  <div class="board-wrap">
+    <canvas id="go" width="900" height="900"></canvas>
+  </div>
+
+  <!-- Firebase SDK（CDN） -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore-compat.js"></script>
+
+<script>
+/* ========= 基本參數 ========= */
+const SIZE = 19;
+const KOMI = 6.5; // 貼目
+const CELL = 38;  // 格距
+const GRID = CELL*(SIZE-1);
+const MARGIN = 64; // 木紋邊距：足夠放外側座標
+const STAR = { 19:[[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]] };
+const WOOD = "#D7B899", WOOD_D="#C49E76";
+const BLACK = 1, WHITE = 2, EMPTY = 0;
+
+const cvs = document.getElementById('go');
+const ctx = cvs.getContext('2d');
+cvs.width = GRID + MARGIN*2;
+cvs.height = GRID + MARGIN*2;
+
+let board = makeBoard(SIZE);
+let turn = BLACK;
+let bCap = 0, wCap = 0;
+let lastBoardHash = ""; // 打劫（禁止立即重現）
+let passStreak = 0;
+let phase = "play"; // play | ended
+let shadeTerritory = false;
+let clientId = Math.random().toString(36).slice(2);
+
+/* ========= UI 元件 ========= */
+const turnLabel = document.getElementById('turnLabel');
+const bCapEl = document.getElementById('bCap');
+const wCapEl = document.getElementById('wCap');
+const koLabel = document.getElementById('koLabel');
+const phaseEl = document.getElementById('phase');
+const bScoreEl = document.getElementById('bScore');
+const wScoreEl = document.getElementById('wScore');
+const komiEl = document.getElementById('komi');
+komiEl.textContent = KOMI;
+
+const chkShade = document.getElementById('chkShade');
+chkShade.addEventListener('change', () => {
+  shadeTerritory = chkShade.checked;
+  draw();
+});
+
+/* ========= Firebase / 線上同步 ========= */
+let app = null, db = null, unsub = null;
+let connectedRoom = null;
+let myRole = "auto";
+const connState = document.getElementById('connState');
+const roomInput = document.getElementById('roomId');
+const roleSelect = document.getElementById('myRole');
+const btnConnect = document.getElementById('btnConnect');
+const btnDisconnect = document.getElementById('btnDisconnect');
+const btnPass = document.getElementById('btnPass');
+const btnNew = document.getElementById('btnNew');
+const cfgBox = document.getElementById('firebaseCfg');
+const btnSaveCfg = document.getElementById('btnSaveCfg');
+const btnClearCfg = document.getElementById('btnClearCfg');
+
+// 設定保存於 localStorage
+cfgBox.value = localStorage.getItem('firebaseCfg') || "";
+roomInput.value = localStorage.getItem('roomId') || "";
+roleSelect.value = localStorage.getItem('myRole') || "auto";
+
+btnSaveCfg.onclick = () => {
+  localStorage.setItem('firebaseCfg', cfgBox.value.trim());
+  alert('Firebase 設定已儲存到瀏覽器。');
+};
+btnClearCfg.onclick = () => {
+  localStorage.removeItem('firebaseCfg');
+  cfgBox.value = "";
+  alert('已清除（重新載入後生效）');
+};
+
+function ensureFirebase(){
+  if(app) return true;
+  try{
+    const cfg = JSON.parse(cfgBox.value.trim());
+    app = firebase.initializeApp(cfg);
+    db = firebase.firestore(app);
+    return true;
+  }catch(e){
+    alert('請先貼上正確的 Firebase 設定 JSON。\\n錯誤：'+e.message);
+    return false;
+  }
+}
+
+btnConnect.onclick = async () => {
+  if(!ensureFirebase()) return;
+  const room = roomInput.value.trim();
+  if(!room){ alert('請輸入房間 ID'); return; }
+  localStorage.setItem('roomId', room);
+  localStorage.setItem('myRole', roleSelect.value);
+  myRole = roleSelect.value;
+  await connectRoom(room);
+};
+
+btnDisconnect.onclick = async () => {
+  disconnectRoom();
+};
+
+async function connectRoom(room){
+  if(unsub) unsub();
+  connectedRoom = room;
+  connState.textContent = `連線中：${room}`;
+  btnConnect.disabled = true; btnDisconnect.disabled = false;
+
+  // 加入事件：讓後加入者可知道既有玩家
+  const roomDoc = db.collection('rooms').doc(room);
+  await roomDoc.set({ updated: Date.now() }, { merge: true });
+  await roomDoc.collection('events').add({
+    type:'join', who:myRole, clientId, ts:Date.now(), id:randomId()
+  });
+
+  // 先抓歷史重播
+  const snap = await roomDoc.collection('events').orderBy('ts').orderBy('id').get();
+  resetGame(); // 重建
+  snap.forEach(d => applyRemoteEvent(d.data(), true));
+
+  // 持續監聽
+  unsub = roomDoc.collection('events').orderBy('ts').orderBy('id')
+    .onSnapshot(ss => {
+      ss.docChanges().forEach(ch => {
+        if(ch.type === 'added'){
+          const ev = ch.doc.data();
+          applyRemoteEvent(ev, false);
+        }
+      });
+    });
+}
+
+function disconnectRoom(){
+  if(unsub) { unsub(); unsub=null; }
+  connectedRoom = null;
+  connState.textContent = '離線';
+  btnConnect.disabled = false; btnDisconnect.disabled = true;
+}
+
+async function sendEvent(ev){
+  if(!connectedRoom) return;
+  ev.clientId = clientId;
+  ev.ts = Date.now();
+  ev.id = randomId();
+  try{
+    await db.collection('rooms').doc(connectedRoom).collection('events').add(ev);
+  }catch(e){
+    console.error(e);
+  }
+}
+
+function applyRemoteEvent(ev, duringReplay){
+  if(ev.clientId === clientId) return; // 忽略自己送出的
+  switch(ev.type){
+    case 'join':
+      // 若我選 auto，且目前沒有明確角色，根據房內已有 join 次數決定（第一個黑、第二個白）
+      if(myRole === 'auto' && !duringReplay){
+        // 粗略：看現場 join 數（包括我自己），這裡在純前端難避免競態，1v1 已足夠
+        // 不做自動改變，避免驚擾使用者；保留手動選擇
+      }
+      break;
+    case 'move':
+      placeFromNet(ev.x, ev.y, ev.player, true);
+      break;
+    case 'pass':
+      remotePass(ev.player, true);
+      break;
+    case 'newgame':
+      resetGame();
+      break;
+    case 'shade':
+      shadeTerritory = !!ev.on;
+      chkShade.checked = shadeTerritory;
+      draw();
+      break;
+  }
+}
+
+/* ========= 棋盤/落子 ========= */
+function makeBoard(n){
+  return Array.from({length:n}, _ => Array(n).fill(EMPTY));
+}
+function cloneBoard(b){
+  return b.map(r => r.slice());
+}
+function hashBoard(b){
+  // 簡單字串 hash
+  return b.map(r => r.join('')).join('|');
+}
+function inBounds(x,y){ return x>=0&&x<SIZE&&y>=0&&y<SIZE; }
+
+function neighbors(x,y){
+  return [[x+1,y],[x-1,y],[x,y+1],[x,y-1]].filter(([i,j])=>inBounds(i,j));
+}
+
+function libertiesOfGroup(b, x, y){
+  const color = b[y][x];
+  const visited = new Set();
+  const stack = [[x,y]];
+  let libs = 0, stones=[];
+  while(stack.length){
+    const [cx,cy]=stack.pop();
+    const key = cx+','+cy;
+    if(visited.has(key)) continue;
+    visited.add(key); stones.push([cx,cy]);
+    for(const [nx,ny] of neighbors(cx,cy)){
+      if(b[ny][nx] === EMPTY) libs++;
+      else if(b[ny][nx] === color) stack.push([nx,ny]);
+    }
+  }
+  return {libs, stones};
+}
+
+function tryPlace(x,y, color){
+  if(board[y][x] !== EMPTY) return {ok:false, reason:'occupied'};
+  const b2 = cloneBoard(board);
+  b2[y][x] = color;
+
+  // 提對方
+  const enemy = color===BLACK?WHITE:BLACK;
+  let captured = 0;
+  for(const [nx,ny] of neighbors(x,y)){
+    if(b2[ny][nx] === enemy){
+      const g = libertiesOfGroup(b2,nx,ny);
+      if(g.libs===0){
+        // 提取
+        for(const [sx,sy] of g.stones){
+          b2[sy][sx]=EMPTY; captured++;
+        }
+      }
+    }
+  }
+
+  // 自殺檢查（若沒提子且無氣）
+  const gSelf = libertiesOfGroup(b2,x,y);
+  if(gSelf.libs===0){
+    if(captured===0) return {ok:false, reason:'suicide'};
+  }
+
+  // 打劫：禁止與上一手盤面相同
+  const newHash = hashBoard(b2);
+  if(newHash === lastBoardHash){
+    return {ok:false, reason:'ko'};
+  }
+
+  return {ok:true, b:b2, captured};
+}
+
+function place(x,y){
+  // 回合權限（線上時才限制）：若連線且我不是該顏色，則不允許
+  if(connectedRoom){
+    const need = (turn===BLACK?'black':'white');
+    if(myRole!=='observer' && myRole!=='auto' && myRole!==need) return;
+  }
+  const res = tryPlace(x,y, turn);
+  if(!res.ok){
+    if(res.reason==='ko'){ flashKo(); }
+    return;
+  }
+  const prevHash = hashBoard(board);
+  board = res.b;
+  lastBoardHash = prevHash; // 記錄上一手
+  if(turn===BLACK) bCap += res.captured; else wCap += res.captured;
+  passStreak = 0;
+  turn = (turn===BLACK)?WHITE:BLACK;
+  draw(); updateStatus();
+
+  if(connectedRoom){
+    sendEvent({type:'move', x,y, player:(turn===WHITE?'black':'white')}); // 注意：送出落子者顏色 = 剛才的對方
+  }
+}
+
+function placeFromNet(x,y, player, silent){
+  const color = (player==='black')?BLACK:WHITE;
+  const res = tryPlace(x,y, color);
+  if(!res.ok) return;
+  const prevHash = hashBoard(board);
+  board = res.b;
+  lastBoardHash = prevHash;
+  if(color===BLACK) bCap += res.captured; else wCap += res.captured;
+  passStreak = 0;
+  turn = (color===BLACK)?WHITE:BLACK;
+  draw(); updateStatus();
+}
+
+function playerName(c){ return c===BLACK?'黑':'白'; }
+
+/* ========= Pass / 終局 / 新對局 ========= */
+btnPass.onclick = () => doPass(true);
+function doPass(local){
+  // 權限檢查
+  if(connectedRoom){
+    const need = (turn===BLACK?'black':'white');
+    if(myRole!=='observer' && myRole!=='auto' && myRole!==need) return;
+  }
+  passStreak++;
+  if(passStreak>=2){
+    phase = 'ended';
+  }
+  turn = (turn===BLACK)?WHITE:BLACK;
+  draw(); updateStatus();
+  if(connectedRoom && local){
+    sendEvent({type:'pass', player:(turn===WHITE?'black':'white')});
+  }
+}
+function remotePass(player){
+  passStreak++;
+  if(passStreak>=2){
+    phase = 'ended';
+  }
+  turn = (player==='black')?WHITE:BLACK; // player 是剛剛虛手者
+  draw(); updateStatus();
+}
+
+btnNew.onclick = () => {
+  resetGame();
+  if(connectedRoom) sendEvent({type:'newgame'});
+};
+
+function resetGame(){
+  board = makeBoard(SIZE);
+  turn = BLACK;
+  bCap = 0; wCap = 0;
+  passStreak = 0;
+  lastBoardHash = "";
+  phase = 'play';
+  shadeTerritory = false;
+  chkShade.checked = false;
+  draw(); updateStatus();
+}
+
+/* ========= 計地（日本式：地 + 提子；白加貼目） ========= */
+function scoreJapanese(){
+  // flood fill 空點，若只接觸單色，算該色地
+  const seen = Array.from({length:SIZE}, _ => Array(SIZE).fill(false));
+  let terrB = 0, terrW = 0;
+
+  function bordersColor(cells){
+    const touch = new Set();
+    for(const [x,y] of cells){
+      for(const [nx,ny] of neighbors(x,y)){
+        const v = board[ny][nx];
+        if(v===BLACK) touch.add(BLACK);
+        else if(v===WHITE) touch.add(WHITE);
+      }
+    }
+    return touch;
+  }
+
+  for(let y=0;y<SIZE;y++){
+    for(let x=0;x<SIZE;x++){
+      if(board[y][x]!==EMPTY || seen[y][x]) continue;
+      // 掃一塊空區
+      const stack=[[x,y]], region=[];
+      seen[y][x]=true;
+      while(stack.length){
+        const [cx,cy]=stack.pop();
+        region.push([cx,cy]);
+        for(const [nx,ny] of neighbors(cx,cy)){
+          if(!seen[ny][nx] && board[ny][nx]===EMPTY){
+            seen[ny][nx]=true; stack.push([nx,ny]);
+          }
+        }
+      }
+      const touch = bordersColor(region);
+      if(touch.size===1){
+        if(touch.has(BLACK)) terrB += region.length;
+        else terrW += region.length;
+      }
+    }
+  }
+
+  const blackScore = terrB + bCap;
+  const whiteScore = terrW + wCap + KOMI;
+  return { terrB, terrW, blackScore, whiteScore };
+}
+
+/* ========= 繪圖 ========= */
+function draw(){
+  // 背景木紋色
+  ctx.fillStyle = WOOD;
+  ctx.fillRect(0,0,cvs.width,cvs.height);
+
+  // 木紋陰影
+  const g = ctx.createLinearGradient(0,0,0,cvs.height);
+  g.addColorStop(0,'rgba(255,255,255,.35)');
+  g.addColorStop(1,'rgba(0,0,0,.08)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,cvs.width,cvs.height);
+
+  // 棋盤區域
+  const left = MARGIN, top = MARGIN;
+
+  // 格線
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for(let i=0;i<SIZE;i++){
+    const y = top + i*CELL;
+    ctx.moveTo(left, y); ctx.lineTo(left+GRID, y);
+  }
+  for(let i=0;i<SIZE;i++){
+    const x = left + i*CELL;
+    ctx.moveTo(x, top); ctx.lineTo(x, top+GRID);
+  }
+  ctx.stroke();
+
+  // 星位
+  ctx.fillStyle = '#000';
+  const stars = STAR[SIZE] || [];
+  stars.forEach(([ix,iy]) => {
+    const x = left + ix*CELL;
+    const y = top + iy*CELL;
+    ctx.beginPath();
+    ctx.arc(x,y,3,0,Math.PI*2);
+    ctx.fill();
+  });
+
+  // 座標（畫在木紋色上，緊貼格線外側）
+  ctx.fillStyle = '#333';
+  ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // X 軸字母（跳過 I）
+  const letters = [];
+  for(let i=0;i<SIZE;i++){
+    const code = 'A'.charCodeAt(0) + i + (i>=8?1:0); // 跳過 I
+    letters.push(String.fromCharCode(code));
+  }
+  for(let i=0;i<SIZE;i++){
+    const x = left + i*CELL;
+    // 上方（外側、緊貼格線）
+    ctx.fillText(letters[i], x, top - 12);
+    // 下方
+    ctx.fillText(letters[i], x, top + GRID + 12);
+  }
+  // Y 軸數字
+  ctx.textAlign = 'right';
+  for(let i=0;i<SIZE;i++){
+    const y = top + i*CELL;
+    ctx.fillText(String(SIZE-i), left - 8, y);     // 左側
+    ctx.textAlign = 'left';
+    ctx.fillText(String(SIZE-i), left + GRID + 8, y); // 右側
+    ctx.textAlign = 'right';
+  }
+
+  // 地盤陰影（終局且開啟時）
+  if(phase==='ended' && shadeTerritory){
+    const { terrMaskB, terrMaskW } = territoryMask();
+    // 黑地
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    for(const [x,y] of terrMaskB){
+      const cx = left + x*CELL, cy = top + y*CELL;
+      ctx.fillRect(cx - CELL/2 + 1, cy - CELL/2 + 1, CELL-2, CELL-2);
+    }
+    // 白地
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.05)';
+    for(const [x,y] of terrMaskW){
+      const cx = left + x*CELL, cy = top + y*CELL;
+      ctx.fillRect(cx - CELL/2 + 1, cy - CELL/2 + 1, CELL-2, CELL-2);
+    }
+  }
+
+  // 棋子
+  for(let y=0;y<SIZE;y++){
+    for(let x=0;x<SIZE;x++){
+      const v = board[y][x];
+      if(v===EMPTY) continue;
+      const cx = left + x*CELL, cy = top + y*CELL;
+      drawStone(cx,cy, v===BLACK?'black':'white');
+    }
+  }
+}
+
+function drawStone(x,y,color){
+  const r = CELL*0.45;
+  const grd = ctx.createRadialGradient(x-r*0.4,y-r*0.4,r*0.2, x,y,r);
+  if(color==='black'){
+    grd.addColorStop(0,'#555');
+    grd.addColorStop(1,'#000');
+  }else{
+    grd.addColorStop(0,'#fff');
+    grd.addColorStop(1,'#e5e7eb');
+  }
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.arc(x,y,r,0,Math.PI*2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,.25)';
+  ctx.stroke();
+}
+
+/* ========= 地盤遮罩資料 ========= */
+function territoryMask(){
+  const seen = Array.from({length:SIZE}, _ => Array(SIZE).fill(false));
+  const maskB=[], maskW=[];
+  function bordersColor(cells){
+    const touch = new Set();
+    for(const [x,y] of cells){
+      for(const [nx,ny] of neighbors(x,y)){
+        const v = board[ny][nx];
+        if(v===BLACK) touch.add(BLACK);
+        else if(v===WHITE) touch.add(WHITE);
+      }
+    }
+    return touch;
+  }
+  for(let y=0;y<SIZE;y++){
+    for(let x=0;x<SIZE;x++){
+      if(board[y][x]!==EMPTY || seen[y][x]) continue;
+      const stack=[[x,y]], region=[];
+      seen[y][x]=true;
+      while(stack.length){
+        const [cx,cy]=stack.pop();
+        region.push([cx,cy]);
+        for(const [nx,ny] of neighbors(cx,cy)){
+          if(!seen[ny][nx] && board[ny][nx]===EMPTY){
+            seen[ny][nx]=true; stack.push([nx,ny]);
+          }
+        }
+      }
+      const touch = bordersColor(region);
+      if(touch.size===1){
+        if(touch.has(BLACK)) maskB.push(...region);
+        else maskW.push(...region);
+      }
+    }
+  }
+  return { terrMaskB:maskB, terrMaskW:maskW };
+}
+
+/* ========= 滑鼠 ========= */
+cvs.addEventListener('click', (e)=>{
+  if(phase==='ended') return;
+  const rect = cvs.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const left = MARGIN, top = MARGIN;
+  // 限制只在格線內
+  if(mx<left-CELL/2 || mx>left+GRID+CELL/2 || my<top-CELL/2 || my>top+GRID+CELL/2) return;
+  // 找最近交叉點
+  const ix = Math.round((mx-left)/CELL);
+  const iy = Math.round((my-top)/CELL);
+  if(ix<0||ix>=SIZE||iy<0||iy>=SIZE) return;
+  place(ix,iy);
+});
+
+/* ========= 視覺提示 ========= */
+function flashKo(){
+  koLabel.textContent = '打劫（禁手）';
+  setTimeout(()=>{koLabel.textContent='無';}, 1000);
+}
+
+/* ========= 狀態更新 ========= */
+function updateStatus(){
+  turnLabel.textContent = (turn===BLACK)?'黑':'白';
+  phaseEl.textContent = (phase==='play')?'對局中':'已終局';
+  bCapEl.textContent = bCap;
+  wCapEl.textContent = wCap;
+  const sc = scoreJapanese();
+  bScoreEl.textContent = sc.blackScore.toFixed(1);
+  wScoreEl.textContent = sc.whiteScore.toFixed(1);
+}
+
+/* ========= 工具 ========= */
+function randomId(){ return Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2); }
+
+/* ========= 鍵盤 ========= */
+document.addEventListener('keydown', (e)=>{
+  if(e.key === 'p' || e.key==='P'){ doPass(true); }
+});
+
+/* ========= 初始化 ========= */
+draw(); updateStatus();
+
+// 遠端切換陰影狀態（同步給對手）
+chkShade.addEventListener('change', ()=>{
+  if(connectedRoom){
+    sendEvent({type:'shade', on:chkShade.checked});
+  }
+});
+
+</script>
+</body>
+</html>
